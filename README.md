@@ -1,22 +1,18 @@
 # mcp-te-server
 
-MCP proxy server for [ThinkingEngine](https://www.thinkingdata.cn/) (数数 ThinkingEngine) system with **automatic browser-based authentication**.
+MCP proxy server for [ThinkingEngine](https://www.thinkingdata.cn/) system with **automatic browser-based authentication**.
 
-一个为数数 ThinkingEngine 系统设计的 MCP 代理服务，支持自动浏览器登录认证。
-
-## Problem / 解决的问题
+## Problem
 
 When using Claude Code with ThinkingEngine's MCP server, you need to manually:
-1. Login to the TE web console
+1. Login to the ThinkingEngine web console
 2. Copy the `mcpToken`
 3. Paste it into Claude Code's MCP configuration
 4. Repeat every time the token expires
 
-使用 Claude Code 连接 TE 的 MCP 服务时，你需要手动登录 → 复制 token → 粘贴到配置 → token 过期后重复操作。
-
 **mcp-te-server** automates this entire flow.
 
-## How It Works / 工作原理
+## How It Works
 
 ```
 ┌─────────────┐    stdio     ┌──────────────────┐     SSE      ┌──────────────┐
@@ -35,23 +31,21 @@ When using Claude Code with ThinkingEngine's MCP server, you need to manually:
 1. On startup, checks for cached tokens
 2. If no valid token, opens a browser window for you to login
 3. Extracts the bearer token from localStorage after login
-4. Exchanges it for an `mcpToken` via the TE API
-5. Proxies all MCP requests transparently to the remote TE server
+4. Exchanges it for an `mcpToken` via the ThinkingEngine API
+5. Proxies all MCP requests transparently to the remote server
 6. Automatically refreshes tokens when they expire
 
-## Prerequisites / 前置条件
+## Prerequisites
 
 - **Node.js** >= 18
 - **Google Chrome** or **Chromium** installed on your system
 - Access to a ThinkingEngine system instance
 
-## Installation / 安装
+## Installation
 
 ### Via npx (recommended)
 
 No installation needed — just configure Claude Code directly (see below).
-
-无需安装，直接在 Claude Code 中配置即可（见下方）。
 
 ### From source
 
@@ -62,18 +56,16 @@ npm install
 npm run build
 ```
 
-## Configuration / 配置
+## Configuration
 
 ### Claude Code
 
 Add the following to your Claude Code MCP configuration (`~/.claude.json`):
 
-在 Claude Code 的 MCP 配置中添加：
-
 ```json
 {
   "mcpServers": {
-    "数数 ThinkingEngine": {
+    "ThinkingEngine": {
       "command": "npx",
       "args": ["-y", "mcp-te-server"],
       "env": {
@@ -85,7 +77,7 @@ Add the following to your Claude Code MCP configuration (`~/.claude.json`):
 }
 ```
 
-### Environment Variables / 环境变量
+### Environment Variables
 
 | Variable | Required | Description |
 |----------|----------|-------------|
@@ -99,7 +91,7 @@ If installed from source, use `node` instead of `npx`:
 ```json
 {
   "mcpServers": {
-    "数数 ThinkingEngine": {
+    "ThinkingEngine": {
       "command": "node",
       "args": ["/path/to/mcp-te-server/dist/index.js"],
       "env": {
@@ -111,7 +103,7 @@ If installed from source, use `node` instead of `npx`:
 }
 ```
 
-## Usage / 使用
+## Usage
 
 1. Configure Claude Code as shown above
 2. Start (or restart) Claude Code
@@ -119,79 +111,7 @@ If installed from source, use `node` instead of `npx`:
 4. After successful login, the browser closes automatically
 5. All subsequent launches use cached tokens (no login required until expiry)
 
----
-
-1. 按上述方式配置 Claude Code
-2. 启动（或重启）Claude Code
-3. 首次启动时会打开 Chrome 浏览器窗口 — 登录你的 ThinkingEngine 系统
-4. 登录成功后浏览器自动关闭
-5. 之后的启动会使用缓存的 token（token 过期前无需再次登录）
-
-## Token Management / Token 管理
-
-Tokens are cached locally at `~/.mcp-te-server/token.json` with `600` file permissions (owner read/write only).
-
-Token 缓存在 `~/.mcp-te-server/token.json`，文件权限为 `600`（仅所有者可读写）。
-
-**Token refresh strategy:**
-- On startup: cached mcpToken → cached bearerToken + API refresh → browser login
-- At runtime: automatic re-authentication on 401 errors
-
-To clear cached tokens:
-
-```bash
-rm -rf ~/.mcp-te-server/token.json
-```
-
-To clear everything (tokens + browser profile):
-
-```bash
-rm -rf ~/.mcp-te-server
-```
-
-## Platform Support / 平台支持
-
-| Platform | Chrome Detection |
-|----------|-----------------|
-| **macOS** | Google Chrome, Chromium, Microsoft Edge |
-| **Windows** | Chrome (Program Files / LocalAppData), Edge |
-| **Linux** | google-chrome, chromium, chromium-browser, snap chromium, edge |
-
-If no system browser is found, falls back to Puppeteer's bundled Chromium.
-
-## Project Structure / 项目结构
-
-```
-mcp-te-server/
-├── src/
-│   ├── index.ts          # Entry point, orchestrates startup
-│   ├── config.ts         # Configuration from environment variables
-│   ├── token-manager.ts  # Token caching and persistence
-│   ├── auth-flow.ts      # Puppeteer login + mcpToken exchange
-│   └── mcp-proxy.ts      # stdio ↔ SSE bidirectional proxy
-├── docs/
-│   └── plans/            # Design documents
-├── package.json
-└── tsconfig.json
-```
-
-## Development / 开发
-
-```bash
-# Install dependencies
-npm install
-
-# Build
-npm run build
-
-# Watch mode (rebuild on changes)
-npm run dev
-
-# Run directly
-npm start
-```
-
-## How the Authentication Flow Works / 认证流程详解
+## Authentication Flow
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -213,6 +133,66 @@ npm start
 │  7. Save tokens & start proxy                    │
 │                                                  │
 └─────────────────────────────────────────────────┘
+```
+
+## Token Management
+
+Tokens are cached locally at `~/.mcp-te-server/token.json` with `600` file permissions (owner read/write only).
+
+**Token refresh strategy:**
+- On startup: cached mcpToken → cached bearerToken + API refresh → browser login
+- At runtime: automatic re-authentication on 401 errors
+
+To clear cached tokens:
+
+```bash
+rm -rf ~/.mcp-te-server/token.json
+```
+
+To clear everything (tokens + browser profile):
+
+```bash
+rm -rf ~/.mcp-te-server
+```
+
+## Platform Support
+
+| Platform | Chrome Detection |
+|----------|-----------------|
+| **macOS** | Google Chrome, Chromium, Microsoft Edge |
+| **Windows** | Chrome (Program Files / LocalAppData), Edge |
+| **Linux** | google-chrome, chromium, chromium-browser, snap chromium, edge |
+
+If no system browser is found, falls back to Puppeteer's bundled Chromium.
+
+## Project Structure
+
+```
+mcp-te-server/
+├── src/
+│   ├── index.ts          # Entry point, orchestrates startup
+│   ├── config.ts         # Configuration from environment variables
+│   ├── token-manager.ts  # Token caching and persistence
+│   ├── auth-flow.ts      # Puppeteer login + mcpToken exchange
+│   └── mcp-proxy.ts      # stdio ↔ SSE bidirectional proxy
+├── package.json
+└── tsconfig.json
+```
+
+## Development
+
+```bash
+# Install dependencies
+npm install
+
+# Build
+npm run build
+
+# Watch mode (rebuild on changes)
+npm run dev
+
+# Run directly
+npm start
 ```
 
 ## License

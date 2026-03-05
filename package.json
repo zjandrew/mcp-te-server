@@ -1,0 +1,26 @@
+{
+  "name": "mcp-te-server",
+  "version": "1.0.0",
+  "description": "MCP proxy server for ThinkingEngine system with automatic authentication",
+  "main": "dist/index.js",
+  "type": "module",
+  "bin": {
+    "mcp-te-server": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js"
+  },
+  "keywords": ["mcp", "proxy", "te", "authentication"],
+  "author": "Andrew",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "puppeteer": "^23.11.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "typescript": "^5.7.3"
+  }
+}

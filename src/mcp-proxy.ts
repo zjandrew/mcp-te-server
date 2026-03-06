@@ -138,76 +138,94 @@ export class McpProxy {
     return caps;
   }
 
+  /**
+   * Execute a remote call with automatic reconnection on connection/timeout errors.
+   * On auth errors, re-authenticates first. On connection errors, reconnects directly.
+   */
+  private async withAutoReconnect<T>(fn: () => Promise<T>, retries = 2): Promise<T> {
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      try {
+        return await fn();
+      } catch (error: any) {
+        const isLast = attempt >= retries;
+
+        if (this.isAuthError(error) && this.onTokenExpired) {
+          log(`Auth error (attempt ${attempt}/${retries}), re-authenticating...`);
+          try {
+            const newToken = await this.onTokenExpired();
+            this.mcpToken = newToken;
+            await this.reconnectRemote();
+            continue; // retry
+          } catch (reAuthError) {
+            log(`Re-authentication failed: ${reAuthError}`);
+            throw error;
+          }
+        }
+
+        if (this.isConnectionError(error) && !isLast) {
+          log(`Connection error (attempt ${attempt}/${retries}): ${error.message || error}. Reconnecting...`);
+          try {
+            await this.reconnectRemote();
+            continue; // retry
+          } catch (reconnectError) {
+            log(`Reconnect failed: ${reconnectError}`);
+            throw error;
+          }
+        }
+
+        throw error;
+      }
+    }
+
+    throw new Error('withAutoReconnect: exhausted retries');
+  }
+
   private registerHandlers(capabilities: Record<string, Record<string, never>>): void {
     if (!this.localServer || !this.remoteClient) {
       throw new Error('Server or client not initialized');
     }
 
-    const remote = this.remoteClient;
-
     // Only register handlers for capabilities the remote actually supports
 
     if (capabilities.tools) {
-      // Proxy listTools
       this.localServer.setRequestHandler(ListToolsRequestSchema, async () => {
-        return await remote.listTools();
+        return await this.withAutoReconnect(() => this.remoteClient!.listTools());
       });
 
-      // Proxy callTool
       this.localServer.setRequestHandler(CallToolRequestSchema, async (request) => {
-        try {
-          return await remote.callTool({
+        return await this.withAutoReconnect(() =>
+          this.remoteClient!.callTool({
             name: request.params.name,
             arguments: request.params.arguments,
-          });
-        } catch (error: any) {
-          // Check if this is a token expiration error
-          if (this.isAuthError(error) && this.onTokenExpired) {
-            log('Token appears expired, attempting re-authentication...');
-            try {
-              const newToken = await this.onTokenExpired();
-              this.mcpToken = newToken;
-              // Reconnect with new token
-              await this.reconnectRemote();
-              // Retry the call
-              return await this.remoteClient!.callTool({
-                name: request.params.name,
-                arguments: request.params.arguments,
-              });
-            } catch (reAuthError) {
-              log(`Re-authentication failed: ${reAuthError}`);
-              throw error; // Throw original error
-            }
-          }
-          throw error;
-        }
+          }),
+        );
       });
     }
 
     if (capabilities.resources) {
-      // Proxy listResources
       this.localServer.setRequestHandler(ListResourcesRequestSchema, async () => {
-        return await remote.listResources();
+        return await this.withAutoReconnect(() => this.remoteClient!.listResources());
       });
 
-      // Proxy readResource
       this.localServer.setRequestHandler(ReadResourceRequestSchema, async (request) => {
-        return await remote.readResource({ uri: request.params.uri });
+        return await this.withAutoReconnect(() =>
+          this.remoteClient!.readResource({ uri: request.params.uri }),
+        );
       });
     }
 
     if (capabilities.prompts) {
-      // Proxy listPrompts
       this.localServer.setRequestHandler(ListPromptsRequestSchema, async () => {
-        return await remote.listPrompts();
+        return await this.withAutoReconnect(() => this.remoteClient!.listPrompts());
       });
 
-      // Proxy getPrompt
       this.localServer.setRequestHandler(GetPromptRequestSchema, async (request) => {
-        return await remote.getPrompt({
-          name: request.params.name,
-          arguments: request.params.arguments,
-        });
+        return await this.withAutoReconnect(() =>
+          this.remoteClient!.getPrompt({
+            name: request.params.name,
+            arguments: request.params.arguments,
+          }),
+        );
       });
     }
   }
@@ -220,6 +238,27 @@ export class McpProxy {
       msg.includes('token') ||
       msg.includes('auth') ||
       msg.includes('expired')
+    );
+  }
+
+  private isConnectionError(error: any): boolean {
+    const msg = String(error?.message || error || '');
+    const code = error?.code;
+    return (
+      msg.includes('-32001') ||
+      msg.includes('timed out') ||
+      msg.includes('timeout') ||
+      msg.includes('ECONNREFUSED') ||
+      msg.includes('ECONNRESET') ||
+      msg.includes('EPIPE') ||
+      msg.includes('socket hang up') ||
+      msg.includes('network') ||
+      msg.includes('fetch failed') ||
+      msg.includes('SSE') ||
+      code === 'ECONNREFUSED' ||
+      code === 'ECONNRESET' ||
+      code === 'EPIPE' ||
+      code === 'ETIMEDOUT'
     );
   }
 

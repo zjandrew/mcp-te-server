@@ -87,8 +87,8 @@ export class McpProxy {
       { capabilities },
     );
 
-    // Register request handlers that proxy to remote
-    this.registerHandlers();
+    // Register request handlers that proxy to remote (only for supported capabilities)
+    this.registerHandlers(capabilities);
 
     // Start stdio transport
     const stdioTransport = new StdioServerTransport();
@@ -109,99 +109,107 @@ export class McpProxy {
         caps.tools = {};
         log(`Discovered ${tools.tools.length} tools from remote.`);
       }
-    } catch (error) {
-      log(`Remote does not support tools: ${error}`);
+    } catch {
+      log('Remote does not support tools.');
     }
 
     // Check if remote supports resources
     try {
       const resources = await this.remoteClient.listResources();
-      if (resources.resources && resources.resources.length > 0) {
+      if (resources.resources) {
         caps.resources = {};
         log(`Discovered ${resources.resources.length} resources from remote.`);
       }
-    } catch (error) {
-      log(`Remote does not support resources: ${error}`);
+    } catch {
+      log('Remote does not support resources (skipping).');
     }
 
     // Check if remote supports prompts
     try {
       const prompts = await this.remoteClient.listPrompts();
-      if (prompts.prompts && prompts.prompts.length > 0) {
+      if (prompts.prompts) {
         caps.prompts = {};
         log(`Discovered ${prompts.prompts.length} prompts from remote.`);
       }
-    } catch (error) {
-      log(`Remote does not support prompts: ${error}`);
+    } catch {
+      log('Remote does not support prompts (skipping).');
     }
 
     return caps;
   }
 
-  private registerHandlers(): void {
+  private registerHandlers(capabilities: Record<string, Record<string, never>>): void {
     if (!this.localServer || !this.remoteClient) {
       throw new Error('Server or client not initialized');
     }
 
     const remote = this.remoteClient;
 
-    // Proxy listTools
-    this.localServer.setRequestHandler(ListToolsRequestSchema, async () => {
-      return await remote.listTools();
-    });
+    // Only register handlers for capabilities the remote actually supports
 
-    // Proxy callTool
-    this.localServer.setRequestHandler(CallToolRequestSchema, async (request) => {
-      try {
-        return await remote.callTool({
+    if (capabilities.tools) {
+      // Proxy listTools
+      this.localServer.setRequestHandler(ListToolsRequestSchema, async () => {
+        return await remote.listTools();
+      });
+
+      // Proxy callTool
+      this.localServer.setRequestHandler(CallToolRequestSchema, async (request) => {
+        try {
+          return await remote.callTool({
+            name: request.params.name,
+            arguments: request.params.arguments,
+          });
+        } catch (error: any) {
+          // Check if this is a token expiration error
+          if (this.isAuthError(error) && this.onTokenExpired) {
+            log('Token appears expired, attempting re-authentication...');
+            try {
+              const newToken = await this.onTokenExpired();
+              this.mcpToken = newToken;
+              // Reconnect with new token
+              await this.reconnectRemote();
+              // Retry the call
+              return await this.remoteClient!.callTool({
+                name: request.params.name,
+                arguments: request.params.arguments,
+              });
+            } catch (reAuthError) {
+              log(`Re-authentication failed: ${reAuthError}`);
+              throw error; // Throw original error
+            }
+          }
+          throw error;
+        }
+      });
+    }
+
+    if (capabilities.resources) {
+      // Proxy listResources
+      this.localServer.setRequestHandler(ListResourcesRequestSchema, async () => {
+        return await remote.listResources();
+      });
+
+      // Proxy readResource
+      this.localServer.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+        return await remote.readResource({ uri: request.params.uri });
+      });
+    }
+
+    if (capabilities.prompts) {
+      // Proxy listPrompts
+      this.localServer.setRequestHandler(ListPromptsRequestSchema, async () => {
+        return await remote.listPrompts();
+      });
+
+      // Proxy getPrompt
+      this.localServer.setRequestHandler(GetPromptRequestSchema, async (request) => {
+        return await remote.getPrompt({
           name: request.params.name,
           arguments: request.params.arguments,
         });
-      } catch (error: any) {
-        // Check if this is a token expiration error
-        if (this.isAuthError(error) && this.onTokenExpired) {
-          log('Token appears expired, attempting re-authentication...');
-          try {
-            const newToken = await this.onTokenExpired();
-            this.mcpToken = newToken;
-            // Reconnect with new token
-            await this.reconnectRemote();
-            // Retry the call
-            return await this.remoteClient!.callTool({
-              name: request.params.name,
-              arguments: request.params.arguments,
-            });
-          } catch (reAuthError) {
-            log(`Re-authentication failed: ${reAuthError}`);
-            throw error; // Throw original error
-          }
-        }
-        throw error;
-      }
-    });
-
-    // Proxy listResources
-    this.localServer.setRequestHandler(ListResourcesRequestSchema, async () => {
-      return await remote.listResources();
-    });
-
-    // Proxy readResource
-    this.localServer.setRequestHandler(ReadResourceRequestSchema, async (request) => {
-      return await remote.readResource({ uri: request.params.uri });
-    });
-
-    // Proxy listPrompts
-    this.localServer.setRequestHandler(ListPromptsRequestSchema, async () => {
-      return await remote.listPrompts();
-    });
-
-    // Proxy getPrompt
-    this.localServer.setRequestHandler(GetPromptRequestSchema, async (request) => {
-      return await remote.getPrompt({
-        name: request.params.name,
-        arguments: request.params.arguments,
       });
-    });
+    }
   }
 
   private isAuthError(error: any): boolean {

@@ -1,5 +1,7 @@
 import puppeteer, { type Page } from 'puppeteer';
 import { promises as fs, statSync } from 'fs';
+import { homedir } from 'os';
+import { join } from 'path';
 import { CONFIG } from './config.js';
 import { TokenManager } from './token-manager.js';
 
@@ -81,16 +83,48 @@ export class AuthFlow {
   }
 
   /**
-   * Launch Puppeteer browser, navigate to login page,
+   * Launch browser, navigate to login page,
    * wait for user to login, and extract bearer token from localStorage.
+   *
+   * Strategy:
+   * 1. Try to use the system Chrome's default profile (reuses existing login session)
+   * 2. If Chrome is already running (profile locked), fall back to a separate profile
    */
   private async browserLogin(): Promise<string> {
-    await fs.mkdir(CONFIG.CHROME_PROFILE_DIR, { recursive: true });
+    const chromePath = this.findChromePath();
+    const defaultProfileDir = this.getDefaultChromeProfileDir();
 
+    // Try default Chrome profile first (reuses existing login session)
+    if (defaultProfileDir) {
+      try {
+        log(`Trying default Chrome profile: ${defaultProfileDir}`);
+        return await this.launchAndExtractToken(chromePath, defaultProfileDir);
+      } catch (error: any) {
+        const msg = String(error?.message || '');
+        if (msg.includes('lock') || msg.includes('already') || msg.includes('SingleInstance')) {
+          log('Chrome is already running. Falling back to separate profile...');
+        } else {
+          log(`Default profile failed: ${msg}. Falling back to separate profile...`);
+        }
+      }
+    }
+
+    // Fall back to a separate profile
+    await fs.mkdir(CONFIG.CHROME_PROFILE_DIR, { recursive: true });
+    return await this.launchAndExtractToken(chromePath, CONFIG.CHROME_PROFILE_DIR);
+  }
+
+  /**
+   * Launch Puppeteer with given profile, navigate to login, and extract token.
+   */
+  private async launchAndExtractToken(
+    chromePath: string | undefined,
+    profileDir: string,
+  ): Promise<string> {
     const browser = await puppeteer.launch({
       headless: false,
-      userDataDir: CONFIG.CHROME_PROFILE_DIR,
-      executablePath: this.findChromePath(),
+      userDataDir: profileDir,
+      executablePath: chromePath,
       args: [
         '--no-first-run',
         '--no-default-browser-check',
@@ -102,24 +136,60 @@ export class AuthFlow {
       const page = await browser.newPage();
       await page.goto(CONFIG.LOGIN_URL, { waitUntil: 'networkidle2' });
 
-      // Check if already logged in (token exists in localStorage)
-      const existingToken = await page.evaluate((key: string) => {
+      // Read the initial token on page load (may be a stale placeholder).
+      const rawInitialToken = await page.evaluate((key: string) => {
         return localStorage.getItem(key);
       }, CONFIG.BEARER_TOKEN_KEY);
+      // localStorage values may be JSON-encoded strings (e.g., "\"abc\"")
+      const initialToken = this.cleanToken(rawInitialToken);
 
-      if (existingToken) {
-        log('Already logged in (token found in localStorage).');
-        return existingToken;
+      const currentUrl = page.url();
+
+      // TE uses hash-based routing: /login#/panel/... means user is logged in
+      // Check if the hash route indicates an authenticated page
+      if (initialToken && this.isAuthenticatedUrl(currentUrl)) {
+        log(`Already logged in (URL: ${currentUrl}). Token: ${initialToken.substring(0, 8)}...`);
+        return initialToken;
       }
 
-      // Wait for user to login
+      // Wait for user to login — the token must either:
+      // 1. Appear fresh (if there was no initial token), or
+      // 2. Change from the initial placeholder value
+      // 3. Or the URL changes to an authenticated route
       log('Waiting for user to login in the browser window...');
       log('(Login window will timeout in 5 minutes)');
 
-      const token = await this.waitForToken(page);
+      const token = await this.waitForToken(page, initialToken);
       return token;
     } finally {
       await browser.close();
+    }
+  }
+
+  /**
+   * Get the default Chrome user data directory for the current platform.
+   */
+  private getDefaultChromeProfileDir(): string | undefined {
+    const platform = process.platform;
+    const home = homedir();
+    let profileDir: string;
+
+    if (platform === 'darwin') {
+      profileDir = join(home, 'Library', 'Application Support', 'Google', 'Chrome');
+    } else if (platform === 'win32') {
+      const localAppData = process.env['LOCALAPPDATA'] || join(home, 'AppData', 'Local');
+      profileDir = join(localAppData, 'Google', 'Chrome', 'User Data');
+    } else {
+      // Linux
+      profileDir = join(home, '.config', 'google-chrome');
+    }
+
+    try {
+      statSync(profileDir);
+      return profileDir;
+    } catch {
+      log(`Default Chrome profile not found at ${profileDir}`);
+      return undefined;
     }
   }
 
@@ -174,19 +244,25 @@ export class AuthFlow {
   }
 
   /**
-   * Poll localStorage every second until ACCESS_TOKEN appears.
+   * Poll localStorage every second until ACCESS_TOKEN appears
+   * AND the page has navigated away from /login (indicating real login).
    */
-  private async waitForToken(page: Page): Promise<string> {
+  private async waitForToken(page: Page, initialToken: string | null): Promise<string> {
     const startTime = Date.now();
 
     while (Date.now() - startTime < CONFIG.LOGIN_TIMEOUT_MS) {
       try {
-        const token = await page.evaluate((key: string) => {
+        const currentUrl = page.url();
+        const rawToken = await page.evaluate((key: string) => {
           return localStorage.getItem(key);
         }, CONFIG.BEARER_TOKEN_KEY);
+        const token = this.cleanToken(rawToken);
 
-        if (token) {
-          log('Login detected! Token found in localStorage.');
+        // Accept the token when EITHER:
+        // 1. The token changed from the initial placeholder (SPA login — URL may not change)
+        // 2. The URL indicates an authenticated page (hash route is not /login)
+        if (token && (token !== initialToken || this.isAuthenticatedUrl(currentUrl))) {
+          log(`Login detected! Token: ${token.substring(0, 8)}... URL: ${currentUrl}`);
           return token;
         }
       } catch (error) {
@@ -197,6 +273,38 @@ export class AuthFlow {
     }
 
     throw new Error('Login timeout: user did not complete login within 5 minutes.');
+  }
+
+  /**
+   * Check if the URL indicates the user is on an authenticated page.
+   * TE uses hash-based routing: /login#/panel/... means logged in,
+   * /login#/login or /login (no hash) means not logged in.
+   */
+  private isAuthenticatedUrl(url: string): boolean {
+    try {
+      const parsed = new URL(url);
+      const hash = parsed.hash; // e.g., "#/panel/panel/3_43_0" or "#/login"
+      // If there's a hash route and it's NOT a login page, user is authenticated
+      if (hash && hash.length > 1) {
+        const hashRoute = hash.substring(1); // Remove leading #
+        return !hashRoute.startsWith('/login');
+      }
+      // No hash — check if pathname itself is /login
+      return !parsed.pathname.includes('/login');
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Clean a token value from localStorage.
+   * Values may be JSON-encoded strings (e.g., '"abc"' with embedded quotes).
+   */
+  private cleanToken(raw: string | null): string | null {
+    if (!raw) return null;
+    // Strip surrounding quotes if present (JSON-encoded string)
+    const cleaned = raw.replace(/^"|"$/g, '');
+    return cleaned || null;
   }
 
   /**

@@ -84,8 +84,10 @@ export class AuthFlow {
    * Open TE login page in the system default browser,
    * start a local HTTP server to receive the bearer token.
    *
-   * After login, user runs a one-liner in the browser console
-   * to send the token back to the local server.
+   * Flow:
+   * 1. Open TE login page in default browser
+   * 2. Open a local guide page with clear instructions
+   * 3. User logs in, then sends token via console command or paste
    */
   private async browserLogin(): Promise<string> {
     return new Promise<string>((resolve, reject) => {
@@ -103,7 +105,26 @@ export class AuthFlow {
           return;
         }
 
-        // Receive token from browser console fetch()
+        // Serve the guide page
+        if (req.method === 'GET' && (req.url === '/' || req.url === '/guide')) {
+          const addr = server.address();
+          const port = typeof addr === 'object' && addr ? addr.port : 0;
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.end(this.buildGuidePage(port));
+          return;
+        }
+
+        // Token receipt status (polled by guide page)
+        if (req.method === 'GET' && req.url === '/status') {
+          res.writeHead(200, {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+          });
+          res.end(JSON.stringify({ received: resolved }));
+          return;
+        }
+
+        // Receive token from browser console fetch() or guide page form
         if (req.method === 'POST' && req.url === '/token') {
           let body = '';
           req.on('data', (chunk: Buffer) => {
@@ -118,7 +139,7 @@ export class AuthFlow {
                 'Access-Control-Allow-Origin': '*',
                 'Content-Type': 'text/plain; charset=utf-8',
               });
-              res.end('Token received! You can close the console.');
+              res.end('OK');
               log(`Token received: ${token.substring(0, 8)}...`);
               server.close();
               resolve(token);
@@ -127,7 +148,7 @@ export class AuthFlow {
                 'Access-Control-Allow-Origin': '*',
                 'Content-Type': 'text/plain; charset=utf-8',
               });
-              res.end('Empty or invalid token. Please try again.');
+              res.end('Empty or invalid token.');
               log('Received empty token, waiting for retry...');
             }
           });
@@ -142,19 +163,15 @@ export class AuthFlow {
         const addr = server.address();
         const port = typeof addr === 'object' && addr ? addr.port : 0;
 
-        // Open login URL in the system default browser
+        // Open TE login page first
         this.openInDefaultBrowser(CONFIG.LOGIN_URL);
 
-        log('');
-        log('════════════════════════════════════════════════════════════');
-        log('  TE login page opened in your default browser.');
-        log('');
-        log('  After logging in, press F12 (or Cmd+Option+J) to open');
-        log('  the browser console on the TE page, then paste:');
-        log('');
-        log(`  fetch('http://127.0.0.1:${port}/token',{method:'POST',body:localStorage.getItem('ACCESS_TOKEN')})`);
-        log('');
-        log('════════════════════════════════════════════════════════════');
+        // Open the local guide page after a short delay
+        setTimeout(() => {
+          this.openInDefaultBrowser(`http://127.0.0.1:${port}/guide`);
+        }, 1500);
+
+        log(`Guide page: http://127.0.0.1:${port}/guide`);
         log('Waiting for token... (timeout: 5 minutes)');
       });
 
@@ -168,6 +185,108 @@ export class AuthFlow {
 
       server.on('close', () => clearTimeout(timer));
     });
+  }
+
+  /**
+   * Build the HTML guide page for token extraction.
+   */
+  private buildGuidePage(port: number): string {
+    const fetchCmd = `fetch('http://127.0.0.1:${port}/token',{method:'POST',body:localStorage.getItem('ACCESS_TOKEN')})`;
+    return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TE System - Token Transfer</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f5f5f7; color: #1d1d1f; }
+  .container { max-width: 640px; margin: 40px auto; padding: 0 20px; }
+  h1 { font-size: 28px; text-align: center; margin-bottom: 8px; }
+  .subtitle { text-align: center; color: #86868b; margin-bottom: 32px; font-size: 15px; }
+  .card { background: white; border-radius: 12px; padding: 24px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+  .step-num { display: inline-block; width: 28px; height: 28px; background: #007AFF; color: white; border-radius: 50%; text-align: center; line-height: 28px; font-weight: 600; font-size: 14px; margin-right: 10px; }
+  .step-title { font-size: 17px; font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; }
+  .command-box { background: #1e1e1e; color: #d4d4d4; padding: 14px; border-radius: 8px; font-family: "SF Mono", Monaco, Consolas, monospace; font-size: 13px; word-break: break-all; line-height: 1.5; margin: 12px 0; position: relative; }
+  .btn { display: inline-block; padding: 10px 20px; border-radius: 8px; border: none; font-size: 15px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
+  .btn-primary { background: #007AFF; color: white; }
+  .btn-primary:hover { background: #0056CC; }
+  .btn-success { background: #34C759; color: white; }
+  .divider { text-align: center; color: #86868b; margin: 16px 0; font-size: 14px; }
+  textarea { width: 100%; height: 56px; border: 2px solid #d2d2d7; border-radius: 8px; padding: 10px; font-family: monospace; font-size: 14px; resize: vertical; }
+  textarea:focus { outline: none; border-color: #007AFF; }
+  .status { text-align: center; padding: 16px; border-radius: 12px; font-size: 16px; font-weight: 500; }
+  .status-waiting { background: #FFF9E6; color: #B25000; }
+  .status-success { background: #E8F9ED; color: #1B7A3D; }
+  .hint { color: #86868b; font-size: 13px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>TE System Login</h1>
+  <p class="subtitle">Complete the login, then send the token back</p>
+
+  <div class="card">
+    <div class="step-title"><span class="step-num">1</span>Log in to TE System</div>
+    <p>Switch to the TE login tab that was just opened and complete your login.</p>
+    <p class="hint">If the tab didn't open, <a href="${CONFIG.LOGIN_URL}" target="_blank">click here</a>.</p>
+  </div>
+
+  <div class="card">
+    <div class="step-title"><span class="step-num">2</span>Send Token (choose one method)</div>
+
+    <p><strong>Method A</strong> — Console command (recommended)</p>
+    <p style="margin-top:8px;">On the <strong>TE page</strong>, press <kbd>F12</kbd> or <kbd>Cmd+Option+J</kbd> to open the console, then paste:</p>
+    <div class="command-box" id="cmd">${fetchCmd}</div>
+    <button class="btn btn-primary" id="copyBtn" onclick="copyCmd()">Copy Command</button>
+
+    <div class="divider">— or —</div>
+
+    <p><strong>Method B</strong> — Paste token manually</p>
+    <p style="margin-top:8px;">In the TE page console, run: <code>copy(localStorage.getItem('ACCESS_TOKEN'))</code></p>
+    <p style="margin-top:4px;">Then paste the token here:</p>
+    <textarea id="tokenInput" placeholder="Paste token here..." style="margin-top:8px;"></textarea>
+    <br><br>
+    <button class="btn btn-primary" onclick="submitToken()">Submit Token</button>
+  </div>
+
+  <div id="status" class="status status-waiting">Waiting for token...</div>
+</div>
+
+<script>
+function copyCmd() {
+  const text = document.getElementById('cmd').textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('copyBtn');
+    btn.textContent = 'Copied!';
+    btn.className = 'btn btn-success';
+    setTimeout(() => { btn.textContent = 'Copy Command'; btn.className = 'btn btn-primary'; }, 2000);
+  });
+}
+
+function submitToken() {
+  const token = document.getElementById('tokenInput').value.trim();
+  if (!token) { alert('Please paste a token first.'); return; }
+  fetch('/token', { method: 'POST', body: token })
+    .then(r => { if (!r.ok) throw new Error('Server rejected token'); showSuccess(); })
+    .catch(e => alert('Error: ' + e.message));
+}
+
+function showSuccess() {
+  const el = document.getElementById('status');
+  el.className = 'status status-success';
+  el.textContent = '\\u2705 Token received! You can close this page.';
+}
+
+// Poll for status every 2 seconds
+setInterval(() => {
+  fetch('/status').then(r => r.json()).then(data => {
+    if (data.received) showSuccess();
+  }).catch(() => {});
+}, 2000);
+</script>
+</body>
+</html>`;
   }
 
   /**

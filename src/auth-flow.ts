@@ -1,7 +1,5 @@
-import puppeteer, { type Page } from 'puppeteer';
-import { promises as fs, statSync } from 'fs';
-import { homedir } from 'os';
-import { join } from 'path';
+import { createServer, type IncomingMessage, type ServerResponse } from 'http';
+import { exec } from 'child_process';
 import { CONFIG } from './config.js';
 import { TokenManager } from './token-manager.js';
 
@@ -16,7 +14,7 @@ export class AuthFlow {
    * Full authentication flow:
    * 1. Try cached mcpToken
    * 2. Try cached bearerToken → obtainMcpToken
-   * 3. Puppeteer login → obtainMcpToken
+   * 3. Default browser login → obtainMcpToken
    * Returns the mcpToken.
    */
   async authenticate(): Promise<string> {
@@ -41,7 +39,7 @@ export class AuthFlow {
       }
     }
 
-    // Step 3: Full Puppeteer login flow
+    // Step 3: Open default browser for login
     log('Starting browser login flow...');
     const bearerToken = await this.browserLogin();
     log('Browser login successful, obtaining mcpToken...');
@@ -83,217 +81,116 @@ export class AuthFlow {
   }
 
   /**
-   * Launch browser, navigate to login page,
-   * wait for user to login, and extract bearer token from localStorage.
+   * Open TE login page in the system default browser,
+   * start a local HTTP server to receive the bearer token.
    *
-   * Strategy:
-   * 1. Try to use the system Chrome's default profile (reuses existing login session)
-   * 2. If Chrome is already running (profile locked), fall back to a separate profile
+   * After login, user runs a one-liner in the browser console
+   * to send the token back to the local server.
    */
   private async browserLogin(): Promise<string> {
-    const chromePath = this.findChromePath();
-    const defaultProfileDir = this.getDefaultChromeProfileDir();
+    return new Promise<string>((resolve, reject) => {
+      let resolved = false;
 
-    // Try default Chrome profile first (reuses existing login session)
-    if (defaultProfileDir) {
-      try {
-        log(`Trying default Chrome profile: ${defaultProfileDir}`);
-        return await this.launchAndExtractToken(chromePath, defaultProfileDir);
-      } catch (error: any) {
-        const msg = String(error?.message || '');
-        if (msg.includes('lock') || msg.includes('already') || msg.includes('SingleInstance')) {
-          log('Chrome is already running. Falling back to separate profile...');
-        } else {
-          log(`Default profile failed: ${msg}. Falling back to separate profile...`);
+      const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+        // CORS preflight
+        if (req.method === 'OPTIONS') {
+          res.writeHead(204, {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'POST, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type',
+          });
+          res.end();
+          return;
         }
-      }
-    }
 
-    // Fall back to a separate profile
-    await fs.mkdir(CONFIG.CHROME_PROFILE_DIR, { recursive: true });
-    return await this.launchAndExtractToken(chromePath, CONFIG.CHROME_PROFILE_DIR);
-  }
+        // Receive token from browser console fetch()
+        if (req.method === 'POST' && req.url === '/token') {
+          let body = '';
+          req.on('data', (chunk: Buffer) => {
+            body += chunk.toString();
+          });
+          req.on('end', () => {
+            const token = this.cleanToken(body);
 
-  /**
-   * Launch Puppeteer with given profile, navigate to login, and extract token.
-   */
-  private async launchAndExtractToken(
-    chromePath: string | undefined,
-    profileDir: string,
-  ): Promise<string> {
-    const browser = await puppeteer.launch({
-      headless: false,
-      userDataDir: profileDir,
-      executablePath: chromePath,
-      args: [
-        '--no-first-run',
-        '--no-default-browser-check',
-        '--disable-default-apps',
-      ],
+            if (token && !resolved) {
+              resolved = true;
+              res.writeHead(200, {
+                'Access-Control-Allow-Origin': '*',
+                'Content-Type': 'text/plain; charset=utf-8',
+              });
+              res.end('Token received! You can close the console.');
+              log(`Token received: ${token.substring(0, 8)}...`);
+              server.close();
+              resolve(token);
+            } else {
+              res.writeHead(400, {
+                'Access-Control-Allow-Origin': '*',
+                'Content-Type': 'text/plain; charset=utf-8',
+              });
+              res.end('Empty or invalid token. Please try again.');
+              log('Received empty token, waiting for retry...');
+            }
+          });
+          return;
+        }
+
+        res.writeHead(404);
+        res.end('Not found');
+      });
+
+      server.listen(0, '127.0.0.1', () => {
+        const addr = server.address();
+        const port = typeof addr === 'object' && addr ? addr.port : 0;
+
+        // Open login URL in the system default browser
+        this.openInDefaultBrowser(CONFIG.LOGIN_URL);
+
+        log('');
+        log('════════════════════════════════════════════════════════════');
+        log('  TE login page opened in your default browser.');
+        log('');
+        log('  After logging in, press F12 (or Cmd+Option+J) to open');
+        log('  the browser console on the TE page, then paste:');
+        log('');
+        log(`  fetch('http://127.0.0.1:${port}/token',{method:'POST',body:localStorage.getItem('ACCESS_TOKEN')})`);
+        log('');
+        log('════════════════════════════════════════════════════════════');
+        log('Waiting for token... (timeout: 5 minutes)');
+      });
+
+      // Timeout
+      const timer = setTimeout(() => {
+        if (!resolved) {
+          server.close();
+          reject(new Error('Login timeout: no token received within 5 minutes.'));
+        }
+      }, CONFIG.LOGIN_TIMEOUT_MS);
+
+      server.on('close', () => clearTimeout(timer));
     });
-
-    try {
-      const page = await browser.newPage();
-      await page.goto(CONFIG.LOGIN_URL, { waitUntil: 'networkidle2' });
-
-      // Read the initial token on page load (may be a stale placeholder).
-      const rawInitialToken = await page.evaluate((key: string) => {
-        return localStorage.getItem(key);
-      }, CONFIG.BEARER_TOKEN_KEY);
-      // localStorage values may be JSON-encoded strings (e.g., "\"abc\"")
-      const initialToken = this.cleanToken(rawInitialToken);
-
-      const currentUrl = page.url();
-
-      // TE uses hash-based routing: /login#/panel/... means user is logged in
-      // Check if the hash route indicates an authenticated page
-      if (initialToken && this.isAuthenticatedUrl(currentUrl)) {
-        log(`Already logged in (URL: ${currentUrl}). Token: ${initialToken.substring(0, 8)}...`);
-        return initialToken;
-      }
-
-      // Wait for user to login — the token must either:
-      // 1. Appear fresh (if there was no initial token), or
-      // 2. Change from the initial placeholder value
-      // 3. Or the URL changes to an authenticated route
-      log('Waiting for user to login in the browser window...');
-      log('(Login window will timeout in 5 minutes)');
-
-      const token = await this.waitForToken(page, initialToken);
-      return token;
-    } finally {
-      await browser.close();
-    }
   }
 
   /**
-   * Get the default Chrome user data directory for the current platform.
+   * Open a URL in the system default browser.
    */
-  private getDefaultChromeProfileDir(): string | undefined {
+  private openInDefaultBrowser(url: string): void {
     const platform = process.platform;
-    const home = homedir();
-    let profileDir: string;
+    let cmd: string;
 
     if (platform === 'darwin') {
-      profileDir = join(home, 'Library', 'Application Support', 'Google', 'Chrome');
+      cmd = `open "${url}"`;
     } else if (platform === 'win32') {
-      const localAppData = process.env['LOCALAPPDATA'] || join(home, 'AppData', 'Local');
-      profileDir = join(localAppData, 'Google', 'Chrome', 'User Data');
+      cmd = `start "" "${url}"`;
     } else {
-      // Linux
-      profileDir = join(home, '.config', 'google-chrome');
+      cmd = `xdg-open "${url}"`;
     }
 
-    try {
-      statSync(profileDir);
-      return profileDir;
-    } catch {
-      log(`Default Chrome profile not found at ${profileDir}`);
-      return undefined;
-    }
-  }
-
-  /**
-   * Find system Chrome executable path across macOS, Windows, and Linux.
-   */
-  private findChromePath(): string | undefined {
-    const platform = process.platform;
-    let candidates: string[] = [];
-
-    if (platform === 'darwin') {
-      candidates = [
-        '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-        '/Applications/Chromium.app/Contents/MacOS/Chromium',
-        '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
-      ];
-    } else if (platform === 'win32') {
-      const programFiles = process.env['PROGRAMFILES'] || 'C:\\Program Files';
-      const programFilesX86 = process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)';
-      const localAppData = process.env['LOCALAPPDATA'] || '';
-      candidates = [
-        `${programFiles}\\Google\\Chrome\\Application\\chrome.exe`,
-        `${programFilesX86}\\Google\\Chrome\\Application\\chrome.exe`,
-        `${localAppData}\\Google\\Chrome\\Application\\chrome.exe`,
-        `${programFiles}\\Microsoft\\Edge\\Application\\msedge.exe`,
-        `${programFilesX86}\\Microsoft\\Edge\\Application\\msedge.exe`,
-      ];
-    } else {
-      // Linux
-      candidates = [
-        '/usr/bin/google-chrome',
-        '/usr/bin/google-chrome-stable',
-        '/usr/bin/chromium',
-        '/usr/bin/chromium-browser',
-        '/snap/bin/chromium',
-        '/usr/bin/microsoft-edge',
-      ];
-    }
-
-    for (const path of candidates) {
-      try {
-        statSync(path);
-        log(`Using system browser: ${path}`);
-        return path;
-      } catch {
-        // Not found, try next
+    exec(cmd, (error) => {
+      if (error) {
+        log(`Could not open browser automatically: ${error.message}`);
+        log(`Please open this URL manually: ${url}`);
       }
-    }
-
-    log('No system Chrome found, using Puppeteer bundled browser.');
-    return undefined;
-  }
-
-  /**
-   * Poll localStorage every second until ACCESS_TOKEN appears
-   * AND the page has navigated away from /login (indicating real login).
-   */
-  private async waitForToken(page: Page, initialToken: string | null): Promise<string> {
-    const startTime = Date.now();
-
-    while (Date.now() - startTime < CONFIG.LOGIN_TIMEOUT_MS) {
-      try {
-        const currentUrl = page.url();
-        const rawToken = await page.evaluate((key: string) => {
-          return localStorage.getItem(key);
-        }, CONFIG.BEARER_TOKEN_KEY);
-        const token = this.cleanToken(rawToken);
-
-        // Accept the token when EITHER:
-        // 1. The token changed from the initial placeholder (SPA login — URL may not change)
-        // 2. The URL indicates an authenticated page (hash route is not /login)
-        if (token && (token !== initialToken || this.isAuthenticatedUrl(currentUrl))) {
-          log(`Login detected! Token: ${token.substring(0, 8)}... URL: ${currentUrl}`);
-          return token;
-        }
-      } catch (error) {
-        // Page might be navigating, ignore errors during polling
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, CONFIG.POLL_INTERVAL_MS));
-    }
-
-    throw new Error('Login timeout: user did not complete login within 5 minutes.');
-  }
-
-  /**
-   * Check if the URL indicates the user is on an authenticated page.
-   * TE uses hash-based routing: /login#/panel/... means logged in,
-   * /login#/login or /login (no hash) means not logged in.
-   */
-  private isAuthenticatedUrl(url: string): boolean {
-    try {
-      const parsed = new URL(url);
-      const hash = parsed.hash; // e.g., "#/panel/panel/3_43_0" or "#/login"
-      // If there's a hash route and it's NOT a login page, user is authenticated
-      if (hash && hash.length > 1) {
-        const hashRoute = hash.substring(1); // Remove leading #
-        return !hashRoute.startsWith('/login');
-      }
-      // No hash — check if pathname itself is /login
-      return !parsed.pathname.includes('/login');
-    } catch {
-      return false;
-    }
+    });
   }
 
   /**

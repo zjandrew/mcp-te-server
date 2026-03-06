@@ -193,12 +193,17 @@ export class McpProxy {
       });
 
       this.localServer.setRequestHandler(CallToolRequestSchema, async (request) => {
-        return await this.withAutoReconnect(() =>
-          this.remoteClient!.callTool({
+        return await this.withAutoReconnect(async () => {
+          const result = await this.remoteClient!.callTool({
             name: request.params.name,
             arguments: request.params.arguments,
-          }),
-        );
+          });
+          // TE server may return auth failure as successful response content
+          if (this.isResponseAuthFailure(result)) {
+            throw new Error('authentication failed (from response content)');
+          }
+          return result;
+        });
       });
     }
 
@@ -260,6 +265,26 @@ export class McpProxy {
       code === 'EPIPE' ||
       code === 'ETIMEDOUT'
     );
+  }
+
+  /**
+   * Check if a successful callTool response actually contains an auth failure message.
+   * TE server sometimes returns "authentication failed!" as response content instead of an error.
+   */
+  private isResponseAuthFailure(result: any): boolean {
+    try {
+      const content = result?.content;
+      if (!Array.isArray(content)) return false;
+      for (const item of content) {
+        const text = String(item?.text || '').toLowerCase();
+        if (text.includes('authentication failed') || text.includes('token expired') || text.includes('invalid token')) {
+          return true;
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return false;
   }
 
   private async reconnectRemote(): Promise<void> {

@@ -61,7 +61,8 @@ Add to `~/.claude.json`:
       "command": "npx",
       "args": ["-y", "@zhoujinandrew/mcp-te-server"],
       "env": {
-        "TE_BASE_URL": "https://your-te-server.example.com"
+        "TE_BASE_URL": "https://your-te-server.example.com",
+        "TE_SSE_URL": "https://your-te-server.example.com:18988/mcp/sse"
       }
     }
   }

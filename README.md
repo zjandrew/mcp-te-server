@@ -1,4 +1,4 @@
-# @thinkingdata/mcp-te-server
+# @zhoujinandrew/mcp-te-server
 
 MCP proxy server for [ThinkingEngine](https://www.thinkingdata.cn/) with **automatic browser-based authentication**.
 
@@ -59,7 +59,7 @@ Add to `~/.claude.json`:
   "mcpServers": {
     "TE审计系统": {
       "command": "npx",
-      "args": ["-y", "@thinkingdata/mcp-te-server"],
+      "args": ["-y", "@zhoujinandrew/mcp-te-server"],
       "env": {
         "TE_BASE_URL": "https://your-te-server.example.com"
       }
@@ -70,7 +70,7 @@ Add to `~/.claude.json`:
 
 ### OpenClaw / Other MCP Clients
 
-Same configuration format — use `npx` with `@thinkingdata/mcp-te-server`.
+Same configuration format — use `npx` with `@zhoujinandrew/mcp-te-server`.
 
 ### Environment Variables
 

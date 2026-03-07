@@ -1,5 +1,5 @@
 {
-  "name": "@thinkingdata/mcp-te-server",
+  "name": "@zhoujinandrew/mcp-te-server",
   "version": "1.0.0",
   "description": "MCP proxy server for ThinkingEngine system with automatic authentication",
   "main": "dist/index.js",

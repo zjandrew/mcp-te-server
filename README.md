@@ -57,7 +57,7 @@ Add to `~/.claude.json`:
 ```json
 {
   "mcpServers": {
-    "TE审计系统": {
+    "ThinkingEngine": {
       "command": "npx",
       "args": ["-y", "@zhoujinandrew/mcp-te-server"],
       "env": {
@@ -85,7 +85,7 @@ Same configuration format — use `npx` with `@zhoujinandrew/mcp-te-server`.
 ```json
 {
   "mcpServers": {
-    "TE审计系统": {
+    "ThinkingEngine": {
       "command": "node",
       "args": ["/path/to/mcp-te-server/dist/index.js"],
       "env": {

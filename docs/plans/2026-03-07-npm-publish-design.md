@@ -33,7 +33,7 @@ Publish mcp-te-server to npm as `@thinkingdata/mcp-te-server`, enabling users to
 ```json
 {
   "mcpServers": {
-    "TE审计系统": {
+    "ThinkingEngine": {
       "command": "npx",
       "args": ["-y", "@thinkingdata/mcp-te-server"],
       "env": {

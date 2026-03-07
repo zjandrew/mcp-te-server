@@ -28,10 +28,10 @@ export const CONFIG = {
   // localStorage key for bearer token
   BEARER_TOKEN_KEY: 'ACCESS_TOKEN',
 
-  // Local storage paths
-  DATA_DIR: join(homedir(), '.mcp-te-server'),
-  TOKEN_FILE: join(homedir(), '.mcp-te-server', 'token.json'),
-  CHROME_PROFILE_DIR: join(homedir(), '.mcp-te-server', 'chrome-profile'),
+  // Local storage paths (isolated per host to avoid token conflicts between different TE instances)
+  DATA_DIR: join(homedir(), '.mcp-te-server', parsedUrl.hostname),
+  TOKEN_FILE: join(homedir(), '.mcp-te-server', parsedUrl.hostname, 'token.json'),
+  CHROME_PROFILE_DIR: join(homedir(), '.mcp-te-server', parsedUrl.hostname, 'chrome-profile'),
 
   // Timeouts and retries
   LOGIN_TIMEOUT_MS: 5 * 60 * 1000, // 5 minutes

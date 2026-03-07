@@ -277,7 +277,9 @@ export class McpProxy {
       if (!Array.isArray(content)) return false;
       for (const item of content) {
         const text = String(item?.text || '').toLowerCase();
-        if (text.includes('authentication failed') || text.includes('token expired') || text.includes('invalid token')) {
+        const textRaw = String(item?.text || '');
+        if (text.includes('authentication failed') || text.includes('token expired') || text.includes('invalid token') ||
+            textRaw.includes('登录检测异常') || textRaw.includes('InsufficientAuthenticationException') || textRaw.includes('Invalid access token')) {
           return true;
         }
       }

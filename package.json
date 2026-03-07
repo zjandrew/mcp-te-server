@@ -1,5 +1,5 @@
 {
-  "name": "mcp-te-server",
+  "name": "@thinkingdata/mcp-te-server",
   "version": "1.0.0",
   "description": "MCP proxy server for ThinkingEngine system with automatic authentication",
   "main": "dist/index.js",
@@ -7,17 +7,24 @@
   "bin": {
     "mcp-te-server": "dist/index.js"
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "prepublishOnly": "npm run build"
   },
-  "keywords": ["mcp", "proxy", "te", "authentication"],
+  "keywords": ["mcp", "proxy", "thinkingengine", "thinkingdata", "authentication"],
   "author": "Andrew",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zjandrew/mcp-te-server.git"
+  },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.4",
-    "puppeteer": "^23.11.1"
+    "@modelcontextprotocol/sdk": "^1.0.4"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",

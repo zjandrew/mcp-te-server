@@ -59,7 +59,7 @@ Add to `~/.claude.json`:
   "mcpServers": {
     "ThinkingEngine": {
       "command": "npx",
-      "args": ["-y", "@zhoujinandrew/mcp-te-server"],
+      "args": ["-y", "@zhoujinandrew/mcp-te-server@latest"],
       "env": {
         "TE_BASE_URL": "https://your-te-server.example.com",
         "TE_SSE_URL": "https://your-te-server.example.com:18988/mcp/sse"
@@ -71,7 +71,7 @@ Add to `~/.claude.json`:
 
 ### OpenClaw / Other MCP Clients
 
-Same configuration format — use `npx` with `@zhoujinandrew/mcp-te-server`.
+Same configuration format — use `npx` with `@zhoujinandrew/mcp-te-server@latest`.
 
 ### Environment Variables
 

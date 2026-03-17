@@ -2,6 +2,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -45,28 +46,39 @@ export class McpProxy {
   }
 
   private async connectToRemote(): Promise<void> {
-    log(`Connecting to TE MCP server at ${CONFIG.SSE_URL}...`);
+    log(`Connecting to TE MCP server at ${CONFIG.MCP_URL}...`);
 
-    const url = new URL(CONFIG.SSE_URL);
+    const url = new URL(CONFIG.MCP_URL);
     const headers = { 'mcpToken': this.mcpToken };
-    const transport = new SSEClientTransport(url, {
-      // Headers for the initial SSE GET connection
-      eventSourceInit: {
-        fetch: (url: string | URL, init?: RequestInit) => {
-          return fetch(url, {
-            ...init,
-            headers: {
-              ...(init?.headers as Record<string, string> || {}),
-              ...headers,
-            },
-          });
+    const isHttp = url.pathname.endsWith('/http') || url.pathname.includes('/mcp/http');
+
+    let transport;
+    if (isHttp) {
+      log('Using StreamableHTTP transport.');
+      transport = new StreamableHTTPClientTransport(url, {
+        requestInit: { headers },
+      });
+    } else {
+      log('Using SSE transport.');
+      transport = new SSEClientTransport(url, {
+        // Headers for the initial SSE GET connection
+        eventSourceInit: {
+          fetch: (url: string | URL, init?: RequestInit) => {
+            return fetch(url, {
+              ...init,
+              headers: {
+                ...(init?.headers as Record<string, string> || {}),
+                ...headers,
+              },
+            });
+          },
+        } as any,
+        // Headers for POST requests (sending messages)
+        requestInit: {
+          headers,
         },
-      } as any,
-      // Headers for POST requests (sending messages)
-      requestInit: {
-        headers,
-      },
-    });
+      });
+    }
 
     this.remoteClient = new Client(
       { name: 'mcp-te-proxy-client', version: '1.0.0' },

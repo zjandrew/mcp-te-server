@@ -14,16 +14,17 @@ if (!BASE_URL) {
 // Strip trailing slash
 const baseUrl = BASE_URL.replace(/\/+$/, '');
 
-// Parse host for SSE port URL
+// Parse host for default SSE URL
 const parsedUrl = new URL(baseUrl);
-const sseUrl = `${parsedUrl.protocol}//${parsedUrl.hostname}:18988/mcp/sse`;
+const defaultMcpUrl = `${parsedUrl.protocol}//${parsedUrl.hostname}:18988/mcp/sse`;
 
 export const CONFIG = {
   // TE System URLs (derived from TE_BASE_URL)
   BASE_URL: baseUrl,
   LOGIN_URL: `${baseUrl}/login`,
   OBTAIN_TOKEN_URL: `${baseUrl}/v1/oauth/obtainMcpToken`,
-  SSE_URL: process.env.TE_SSE_URL || sseUrl,
+  // TE_HTTP_URL takes priority over TE_SSE_URL; falls back to auto-generated SSE URL
+  MCP_URL: process.env.TE_HTTP_URL || process.env.TE_SSE_URL || defaultMcpUrl,
 
   // localStorage key for bearer token
   BEARER_TOKEN_KEY: 'ACCESS_TOKEN',
